@@ -34,12 +34,9 @@ mongoose.connect(process.env.MONGODB_URI)
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/customers', require('./routes/customers'));
-app.use('/api/vehicles', require('./routes/vehicles'));
+app.use('/api/machines', require('./routes/machines'));
 app.use('/api/rentals', require('./routes/rentals'));
 app.use('/api/payments', require('./routes/payments'));
-app.use('/api/alerts', require('./routes/alerts'));
-app.use('/api/search', require('./routes/search'));
-app.use('/api/settings', require('./routes/settings'));
 
 // Error handling middleware
 app.use((err, req, res, next) => {

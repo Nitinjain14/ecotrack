@@ -1,12 +1,10 @@
 const express = require('express');
 const moment = require('moment');
 const { protect, ensureDataIsolation } = require('../middlewares/auth');
-const Vehicle = require('../models/Vehicle');
+const Machine = require('../models/Machine');
 const Customer = require('../models/Customer');
-const Rental = require('../models/Rental');
-const Payment = require('../models/Payment');
-const Alert = require('../models/Alert');
-const { generateAllAlerts } = require('../utils/alertGenerator');
+const RentalHistory = require('../models/RentalHistory');
+const PaymentRecord = require('../models/PaymentRecord');
 
 const router = express.Router();
 
@@ -17,22 +15,19 @@ router.get('/stats', protect, ensureDataIsolation, async (req, res) => {
   try {
     const dealerId = req.dealerId;
 
-    // Generate alerts before fetching stats
-    await generateAllAlerts(dealerId);
-
-    // Get vehicle statistics
-    const vehicleStats = await Vehicle.aggregate([
+    // Get machine statistics
+    const machineStats = await Machine.aggregate([
       { $match: { dealerId, isActive: true } },
       {
         $group: {
-          _id: '$status',
+          _id: '$condition',
           count: { $sum: 1 }
         }
       }
     ]);
 
     // Get rental statistics
-    const rentalStats = await Rental.aggregate([
+    const rentalStats = await RentalHistory.aggregate([
       { $match: { dealerId } },
       {
         $group: {
@@ -43,13 +38,14 @@ router.get('/stats', protect, ensureDataIsolation, async (req, res) => {
     ]);
 
     // Get payment statistics
-    const paymentStats = await Payment.aggregate([
+    const paymentStats = await PaymentRecord.aggregate([
       { $match: { dealerId } },
       {
         $group: {
-          _id: '$status',
+          _id: null,
           count: { $sum: 1 },
-          totalAmount: { $sum: '$amount' }
+          totalPaid: { $sum: '$amount_paid' },
+          totalOutstanding: { $sum: '$outstanding_due' }
         }
       }
     ]);
@@ -57,39 +53,29 @@ router.get('/stats', protect, ensureDataIsolation, async (req, res) => {
     // Get customer count
     const customerCount = await Customer.countDocuments({ dealerId, isActive: true });
 
-    // Get active alerts count
-    const alertCount = await Alert.countDocuments({ 
-      dealerId, 
-      status: 'Active' 
-    });
-
-    // Format vehicle stats
-    const vehicleStatusCounts = {
+    // Format machine stats
+    const machineStatusCounts = {
       total: 0,
       available: 0,
       rented: 0,
       reserved: 0,
-      maintenance: 0,
-      outOfService: 0
+      under_maintenance: 0
     };
 
-    vehicleStats.forEach(stat => {
-      vehicleStatusCounts.total += stat.count;
+    machineStats.forEach(stat => {
+      machineStatusCounts.total += stat.count;
       switch (stat._id) {
-        case 'Available':
-          vehicleStatusCounts.available = stat.count;
+        case 'available':
+          machineStatusCounts.available = stat.count;
           break;
-        case 'Rented':
-          vehicleStatusCounts.rented = stat.count;
+        case 'rented':
+          machineStatusCounts.rented = stat.count;
           break;
-        case 'Reserved':
-          vehicleStatusCounts.reserved = stat.count;
+        case 'reserved':
+          machineStatusCounts.reserved = stat.count;
           break;
-        case 'Under Maintenance':
-          vehicleStatusCounts.maintenance = stat.count;
-          break;
-        case 'Out of Service':
-          vehicleStatusCounts.outOfService = stat.count;
+        case 'under_maintenance':
+          machineStatusCounts.under_maintenance = stat.count;
           break;
       }
     });
@@ -98,62 +84,37 @@ router.get('/stats', protect, ensureDataIsolation, async (req, res) => {
     const rentalStatusCounts = {
       active: 0,
       completed: 0,
-      overdue: 0,
-      cancelled: 0
+      overdue: 0
     };
 
     rentalStats.forEach(stat => {
       switch (stat._id) {
-        case 'Active':
+        case 'active':
           rentalStatusCounts.active = stat.count;
           break;
-        case 'Completed':
+        case 'completed':
           rentalStatusCounts.completed = stat.count;
           break;
-        case 'Overdue':
+        case 'overdue':
           rentalStatusCounts.overdue = stat.count;
-          break;
-        case 'Cancelled':
-          rentalStatusCounts.cancelled = stat.count;
           break;
       }
     });
 
     // Format payment stats
     const paymentStatusCounts = {
-      totalRevenue: 0,
-      pendingAmount: 0,
-      overdueAmount: 0,
-      paidCount: 0,
-      pendingCount: 0,
-      overdueCount: 0
+      totalPaid: paymentStats[0]?.totalPaid || 0,
+      totalOutstanding: paymentStats[0]?.totalOutstanding || 0,
+      totalPayments: paymentStats[0]?.count || 0
     };
-
-    paymentStats.forEach(stat => {
-      switch (stat._id) {
-        case 'Completed':
-          paymentStatusCounts.totalRevenue = stat.totalAmount || 0;
-          paymentStatusCounts.paidCount = stat.count;
-          break;
-        case 'Pending':
-          paymentStatusCounts.pendingAmount = stat.totalAmount || 0;
-          paymentStatusCounts.pendingCount = stat.count;
-          break;
-        case 'Partially Paid':
-          paymentStatusCounts.overdueAmount += stat.totalAmount || 0;
-          paymentStatusCounts.overdueCount += stat.count;
-          break;
-      }
-    });
 
     res.json({
       success: true,
       data: {
-        vehicles: vehicleStatusCounts,
+        machines: machineStatusCounts,
         rentals: rentalStatusCounts,
         payments: paymentStatusCounts,
         customers: customerCount,
-        alerts: alertCount,
         lastUpdated: new Date()
       }
     });
@@ -175,30 +136,24 @@ router.get('/recent-activity', protect, ensureDataIsolation, async (req, res) =>
     const limit = parseInt(req.query.limit) || 10;
 
     // Get recent rentals
-    const recentRentals = await Rental.find({ dealerId })
-      .populate('customerId', 'name')
-      .populate('vehicleId', 'vehicleId type')
-      .sort({ createdAt: -1 })
+    const recentRentals = await RentalHistory.find({ dealerId })
+      .populate('customer_id', 'name')
+      .populate('machine_id', 'machine_name machine_type')
+      .sort({ rented_on: -1 })
       .limit(limit);
 
     // Get recent payments
-    const recentPayments = await Payment.find({ dealerId })
-      .populate('customerId', 'name')
-      .populate('rentalId', 'rentalId')
-      .sort({ createdAt: -1 })
-      .limit(limit);
-
-    // Get recent alerts
-    const recentAlerts = await Alert.find({ dealerId, status: 'Active' })
-      .sort({ createdAt: -1 })
+    const recentPayments = await PaymentRecord.find({ dealerId })
+      .populate('customer_id', 'name')
+      .populate('rental_id', 'rented_on')
+      .sort({ payment_date: -1 })
       .limit(limit);
 
     res.json({
       success: true,
       data: {
         rentals: recentRentals,
-        payments: recentPayments,
-        alerts: recentAlerts
+        payments: recentPayments
       }
     });
   } catch (error) {
@@ -223,29 +178,28 @@ router.get('/revenue-chart', protect, ensureDataIsolation, async (req, res) => {
     switch (period) {
       case 'year':
         startDate = moment().subtract(12, 'months').startOf('month');
-        groupBy = { $dateToString: { format: "%Y-%m", date: "$paidDate" } };
+        groupBy = { $dateToString: { format: "%Y-%m", date: "$payment_date" } };
         break;
       case 'quarter':
         startDate = moment().subtract(3, 'months').startOf('month');
-        groupBy = { $dateToString: { format: "%Y-%m", date: "$paidDate" } };
+        groupBy = { $dateToString: { format: "%Y-%m", date: "$payment_date" } };
         break;
       default:
         startDate = moment().subtract(30, 'days').startOf('day');
-        groupBy = { $dateToString: { format: "%Y-%m-%d", date: "$paidDate" } };
+        groupBy = { $dateToString: { format: "%Y-%m-%d", date: "$payment_date" } };
     }
 
-    const revenueData = await Payment.aggregate([
+    const revenueData = await PaymentRecord.aggregate([
       {
         $match: {
           dealerId,
-          status: 'Completed',
-          paidDate: { $gte: startDate.toDate() }
+          payment_date: { $gte: startDate.toDate() }
         }
       },
       {
         $group: {
           _id: groupBy,
-          totalRevenue: { $sum: '$amount' },
+          totalRevenue: { $sum: '$amount_paid' },
           count: { $sum: 1 }
         }
       },

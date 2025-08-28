@@ -1,12 +1,12 @@
 const express = require('express');
 const { protect, ensureDataIsolation } = require('../middlewares/auth');
 const {
-  getPayments,
-  getPayment,
-  createPayment,
-  updatePayment,
-  deletePayment
-} = require('../controllers/paymentController');
+  getMachines,
+  getMachine,
+  createMachine,
+  updateMachine,
+  deleteMachine
+} = require('../controllers/machineController');
 
 const router = express.Router();
 
@@ -14,12 +14,12 @@ router.use(protect);
 router.use(ensureDataIsolation);
 
 router.route('/')
-  .get(getPayments)
-  .post(createPayment);
+  .get(getMachines)
+  .post(createMachine);
 
 router.route('/:id')
-  .get(getPayment)
-  .put(updatePayment)
-  .delete(deletePayment);
+  .get(getMachine)
+  .put(updateMachine)
+  .delete(deleteMachine);
 
 module.exports = router;
